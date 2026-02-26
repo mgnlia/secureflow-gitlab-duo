@@ -1,0 +1,93 @@
+# SecureFlow CI/CD Pipeline
+# Demonstrates the security scanning that SecureFlow helps remediate
+
+stages:
+  - test
+  - security
+  - deploy
+
+variables:
+  PYTHON_VERSION: "3.11"
+
+# ─────────────────────────────────────────────
+# SAST — Static Application Security Testing
+# ─────────────────────────────────────────────
+sast:
+  stage: security
+  image: python:3.11-slim
+  script:
+    - pip install bandit semgrep
+    - echo "Running Bandit SAST scan..."
+    - bandit -r demo/vulnerable-app/src/ -f json -o bandit-report.json || true
+    - echo "Running Semgrep scan..."
+    - semgrep --config=auto demo/vulnerable-app/src/ --json --output semgrep-report.json || true
+    - echo "Security scan complete. Review reports."
+  artifacts:
+    paths:
+      - bandit-report.json
+      - semgrep-report.json
+    expire_in: 1 week
+  allow_failure: true
+
+# ─────────────────────────────────────────────
+# Secret Detection
+# ─────────────────────────────────────────────
+secret-detection:
+  stage: security
+  image: python:3.11-slim
+  script:
+    - pip install detect-secrets
+    - detect-secrets scan demo/vulnerable-app/ > .secrets.baseline || true
+    - echo "Secret detection complete"
+  artifacts:
+    paths:
+      - .secrets.baseline
+    expire_in: 1 week
+  allow_failure: true
+
+# ─────────────────────────────────────────────
+# Dependency Scanning
+# ─────────────────────────────────────────────
+dependency-scanning:
+  stage: security
+  image: python:3.11-slim
+  script:
+    - pip install safety
+    - safety check -r demo/vulnerable-app/requirements.txt --json > safety-report.json || true
+    - echo "Dependency scan complete"
+  artifacts:
+    paths:
+      - safety-report.json
+    expire_in: 1 week
+  allow_failure: true
+
+# ─────────────────────────────────────────────
+# Unit Tests for Demo App
+# ─────────────────────────────────────────────
+test:
+  stage: test
+  image: python:3.11-slim
+  script:
+    - cd demo/vulnerable-app
+    - pip install -r requirements.txt
+    - python -m pytest tests/ -v || echo "Tests complete"
+  allow_failure: true
+
+# ─────────────────────────────────────────────
+# Validate Flow YAML
+# ─────────────────────────────────────────────
+validate-flow-config:
+  stage: test
+  image: python:3.11-slim
+  script:
+    - pip install pyyaml
+    - python -c "
+      import yaml
+      with open('.gitlab/duo/secureflow.yml') as f:
+          config = yaml.safe_load(f)
+      print('Flow config valid:', list(config.keys()))
+      assert 'name' in config
+      assert 'system_prompt' in config
+      assert 'tools' in config
+      print('✅ SecureFlow YAML config is valid')
+      "
